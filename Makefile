@@ -2,8 +2,15 @@
 SRC = streaks.c
 OUT = streaks
 
-# Installation directory
-INSTALL_DIR = $(HOME)/.local/bin
+# Detect the operating system
+UNAME := $(shell uname)
+
+# Determine the installation directory based on the OS
+ifeq ($(UNAME), Darwin)
+  INSTALL_DIR = $(HOME)/Library/Application\ Support/bin
+else
+  INSTALL_DIR = $(HOME)/.local/bin
+endif
 
 # Compiler and flags
 CC = gcc
