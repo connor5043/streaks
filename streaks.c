@@ -62,9 +62,7 @@ void toggle_date_file_in_folder(const char *folder_path, const char *date) {
     // Check if the file already exists
     if (access(file_path, F_OK) == 0) {
         // File exists, delete it
-        if (unlink(file_path) == 0) {
-            printf("Deleted file: %s\n", file_path);
-        } else {
+        if (unlink(file_path) != 0) {
             perror("Error deleting file");
         }
     } else {
