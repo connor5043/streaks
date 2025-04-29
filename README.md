@@ -1,5 +1,5 @@
 # streaks
-cli tool for consistent productivity on macOS 🍏 and Linux 🐧
+Goal-tracking cli tool for macOS 🍏 and Linux 🐧
 
 ```
 make
