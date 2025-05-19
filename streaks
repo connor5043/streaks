@@ -1,0 +1,267 @@
+#!/usr/bin/python3
+# -*- coding: utf-8 -*-
+import os
+import sys
+import sqlite3
+import datetime
+from ddate.base import DDate
+from colorama import Fore
+
+DB_DIR = os.path.join(
+	os.environ.get("HOME", ""),
+	"Library/Application Support/streaks" if sys.platform == "darwin" else ".local/share/streaks",
+)
+DB_PATH = os.path.join(DB_DIR, "streaks.db")
+
+# Discordian weekday codes for exclusion and display.
+DISCORDIAN_DAY_ABBR = ["S", "B", "P", "P", "O"]  # For header: Sweetmorn, Boomtime, Pungenday, Prickle-Prickle, Setting Orange
+DISCORDIAN_DAY_CODES = ["s", "b", "pu", "pr", "o"]  # For exclusion
+
+def ensure_db():
+	os.makedirs(DB_DIR, exist_ok=True)
+	conn = sqlite3.connect(DB_PATH)
+	cur = conn.cursor()
+	cur.execute("""
+		CREATE TABLE IF NOT EXISTS streaks (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			name TEXT UNIQUE NOT NULL,
+			excluded_days TEXT DEFAULT ''
+		)
+	""")
+	cur.execute("""
+		CREATE TABLE IF NOT EXISTS completions (
+			streak_id INTEGER,
+			day TEXT, -- 'YYYY-MM-DD'
+			UNIQUE(streak_id, day),
+			FOREIGN KEY(streak_id) REFERENCES streaks(id) ON DELETE CASCADE
+		)
+	""")
+	conn.commit()
+	return conn
+
+def list_streaks(conn):
+	cur = conn.cursor()
+	cur.execute("SELECT id, name, excluded_days FROM streaks ORDER BY lower(name)")
+	return cur.fetchall()
+
+def create_streak(conn, name):
+	cur = conn.cursor()
+	try:
+		cur.execute("INSERT INTO streaks (name) VALUES (?)", (name,))
+		conn.commit()
+	except sqlite3.IntegrityError:
+		print(f"Streak '{name}' already exists.")
+
+def delete_streak(conn, idx):
+	streaks = list_streaks(conn)
+	if idx < 0 or idx >= len(streaks):
+		print("Invalid streak number.")
+		return
+	streak_id = streaks[idx][0]
+	cur = conn.cursor()
+	cur.execute("DELETE FROM streaks WHERE id = ?", (streak_id,))
+	conn.commit()
+	print(f"Deleted {streaks[idx][1]}")
+
+def rename_streak(conn, idx, new_name):
+	streaks = list_streaks(conn)
+	if idx < 0 or idx >= len(streaks):
+		print("Invalid streak number.")
+		return
+	try:
+		cur = conn.cursor()
+		cur.execute("UPDATE streaks SET name = ? WHERE id = ?", (new_name, streaks[idx][0]))
+		conn.commit()
+		print(f"Renamed folder: {streaks[idx][1]} -> {new_name}")
+	except sqlite3.IntegrityError:
+		print(f"Streak '{new_name}' already exists.")
+
+def add_completion(conn, idx, date):
+	streaks = list_streaks(conn)
+	if idx < 0 or idx >= len(streaks):
+		print("Invalid streak number.")
+		return
+	streak_id = streaks[idx][0]
+	cur = conn.cursor()
+	cur.execute("SELECT 1 FROM completions WHERE streak_id=? AND day=?", (streak_id, date))
+	if cur.fetchone():
+		cur.execute("DELETE FROM completions WHERE streak_id=? AND day=?", (streak_id, date))
+	else:
+		cur.execute("INSERT OR IGNORE INTO completions (streak_id, day) VALUES (?, ?)", (streak_id, date))
+	conn.commit()
+
+def create_streak_files(conn, idx, days):
+	streaks = list_streaks(conn)
+	if idx < 0 or idx >= len(streaks):
+		print("Invalid streak number.")
+		return
+	streak_id = streaks[idx][0]
+	today = datetime.date.today()
+	cur = conn.cursor()
+	for i in range(days):
+		day = today - datetime.timedelta(days=i)
+		day_str = day.strftime("%Y-%m-%d")
+		cur.execute(
+			"INSERT OR IGNORE INTO completions (streak_id, day) VALUES (?, ?)",
+			(streak_id, day_str)
+		)
+	conn.commit()
+
+def set_excluded_days(conn, idx, days):
+	streaks = list_streaks(conn)
+	if idx < 0 or idx >= len(streaks):
+		print("Invalid streak number.")
+		return
+	streak_id = streaks[idx][0]
+	cur = conn.cursor()
+	cur.execute("UPDATE streaks SET excluded_days=? WHERE id=?", (days or '', streak_id))
+	conn.commit()
+
+def get_excluded_days(streak_row):
+	# Returns a set of Discordian day codes (s, b, pu, pr, o) for exclusion
+	excl = streak_row[2]
+	return set(x.strip().lower() for x in excl.split(',') if x.strip())
+
+def build_streak_string(conn, streak_row):
+	streak_id = streak_row[0]
+	excluded = get_excluded_days(streak_row)
+	today = datetime.date.today()
+	cur = conn.cursor()
+	chars = []
+	for i in range(-9, 1):
+		day = today + datetime.timedelta(days=i)
+		day_str = day.strftime("%Y-%m-%d")
+		disc_idx = DDate(day).day_of_week
+		day_code = DISCORDIAN_DAY_CODES[disc_idx]
+		if day_code in excluded:
+			chars.append('/')
+		else:
+			cur.execute("SELECT 1 FROM completions WHERE streak_id=? AND day=?", (streak_id, day_str))
+			if cur.fetchone():
+				chars.append('X')
+			else:
+				chars.append(' ')
+	return ''.join(chars)
+
+def calculate_streak(conn, streak_row):
+	streak_id = streak_row[0]
+	excluded = get_excluded_days(streak_row)
+	today = datetime.date.today()
+	cur = conn.cursor()
+	streak = 0
+	offset = -1
+	while True:
+		day = today + datetime.timedelta(days=offset)
+		disc_idx = DDate(day).day_of_week
+		day_code = DISCORDIAN_DAY_CODES[disc_idx]
+		if day_code in excluded:
+			offset -= 1
+			continue
+		day_str = day.strftime("%Y-%m-%d")
+		cur.execute("SELECT 1 FROM completions WHERE streak_id=? AND day=?", (streak_id, day_str))
+		if cur.fetchone():
+			streak += 1
+			offset -= 1
+		else:
+			break
+	# Check for today:
+	day_str = today.strftime("%Y-%m-%d")
+	disc_idx = DDate(today).day_of_week
+	day_code = DISCORDIAN_DAY_CODES[disc_idx]
+	if day_code not in excluded:
+		cur.execute("SELECT 1 FROM completions WHERE streak_id=? AND day=?", (streak_id, day_str))
+		if cur.fetchone():
+			streak += 1
+	return streak
+
+def print_help():
+	print("Usage: streaks.py [command] [arguments]\n")
+	print("Commands:")
+	print("  h(elp)					 Show this help message")
+	print("  a(dd) [name]			   Add a new streak with the given name")
+	print("  rm / del(ete) [number]	 Delete a streak")
+	print("  r(ename) [number] [name]   Rename a streak")
+	print("  t(oggle) [number] [date]   Toggle streak completion for a date (default: today)")
+	print("  s(ince) [number] [days]	For importing an existing streak")
+	print("  days [number] [values]	 Days to exclude (e.g., 's,b,pu,pr,o')")
+	print("\nDefault Behavior:")
+	print("  Without arguments, the program lists all streaks.\n")
+
+def parse_date_input(input_date):
+	try:
+		if '-' in input_date:
+			parts = [int(x) for x in input_date.split('-')]
+			if len(parts) == 3:
+				return f"{parts[0]:04d}-{parts[1]:02d}-{parts[2]:02d}"
+			elif len(parts) == 2:
+				today = datetime.date.today()
+				return f"{today.year:04d}-{parts[0]:02d}-{parts[1]:02d}"
+	except Exception:
+		pass
+	print("Error: Invalid date format. Use YYYY-MM-DD or MM-DD.")
+	sys.exit(1)
+
+def make_wave_line(conn):
+	cur = conn.cursor()
+	cur.execute("SELECT MAX(LENGTH(name)) FROM streaks")
+	longest_length = cur.fetchone()[0] or 0  # Handle empty table
+	n = longest_length + 3
+	pattern = "=~"
+	repeats = (n + 1) // 2
+	return (pattern * repeats)[:n]
+
+def main():
+	conn = ensure_db()
+	args = sys.argv
+
+	if len(args) >= 3 and args[1] in ("a", "add"):
+		create_streak(conn, args[2])
+		return
+
+	if len(args) >= 3 and args[1] in ("rm", "del", "delete"):
+		delete_streak(conn, int(args[2])-1)
+		return
+
+	if len(args) >= 4 and args[1] in ("r", "rename"):
+		rename_streak(conn, int(args[2])-1, args[3])
+		return
+
+	if len(args) >= 4 and args[1] in ("s", "since"):
+		create_streak_files(conn, int(args[2])-1, int(args[3]))
+		return
+
+	if len(args) >= 3 and args[1] == "days":
+		set_excluded_days(conn, int(args[2])-1, args[3] if len(args) >= 4 else '')
+		return
+
+	if len(args) >= 3 and args[1] in ("t", "toggle"):
+		idx = int(args[2])-1
+		if len(args) >= 4:
+			date = parse_date_input(args[3])
+		else:
+			date = datetime.date.today().strftime("%Y-%m-%d")
+		add_completion(conn, idx, date)
+		return
+
+	if len(args) >= 2 and args[1] in ("h", "help"):
+		print_help()
+		return
+
+	# Default: print streaks list
+	today = datetime.date.today()
+	streak_sequence = []
+	today_idx = DDate(today).day_of_week
+	for i in range(9):
+		idx = (today_idx + i + 1) % 5
+		streak_sequence.append(DISCORDIAN_DAY_ABBR[idx])
+	streak_sequence.append(DISCORDIAN_DAY_ABBR[today_idx])
+	print(Fore.CYAN + "23 " + Fore.YELLOW + ''.join(streak_sequence) + Fore.LIGHTBLACK_EX + " " + make_wave_line(conn))
+
+	streaks = list_streaks(conn)
+	for i, streak_row in enumerate(streaks):
+		streak_string = build_streak_string(conn, streak_row)
+		streak_count = calculate_streak(conn, streak_row)
+		print((Fore.BLUE if i % 2 == 0 else Fore.MAGENTA) + f"{i+1}. {streak_string} {streak_count}d {streak_row[1]}")
+
+if __name__ == "__main__":
+	main()
