@@ -5,7 +5,7 @@ import sys
 import sqlite3
 import datetime
 from ddate.base import DDate
-from colorama import Fore
+from colorama import Fore, Style
 
 DB_DIR = os.path.join(
 	os.environ.get("HOME", ""),
@@ -262,6 +262,8 @@ def main():
 		streak_string = build_streak_string(conn, streak_row)
 		streak_count = calculate_streak(conn, streak_row)
 		print((Fore.BLUE if i % 2 == 0 else Fore.MAGENTA) + f"{i+1}. {streak_string} {streak_count}d {streak_row[1]}")
+
+	print(Style.RESET_ALL, end="")
 
 if __name__ == "__main__":
 	main()
